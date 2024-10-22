@@ -12,7 +12,7 @@
 #include <sstream>
 #include <iostream>
 #include <iomanip>
-
+#include <opencv2/opencv.hpp>
 
 // Helper function for dispaying time conveniently
 std::string pretty_time(std::chrono::nanoseconds duration);
@@ -32,6 +32,8 @@ int main(int argc, char * argv[]) try
     bool depth_frame = false;
     bool both_frames = false;
     bool button_visible = true;
+    bool record_bag =false;
+    bool recordmp4 = false;
 
     // Declare a texture for the depth image on the GPU
     texture depth_image;
@@ -56,6 +58,11 @@ int main(int argc, char * argv[]) try
 
     // Create a variable to control the seek bar
     int seek_pos;
+
+    // Create a video writer to save the frames
+    int fps = 5;
+    cv::VideoWriter video("output.mp4", cv::VideoWriter::fourcc('M', 'J', 'P', 'G'), fps, cv::Size(1280, 720));
+
 
     // While application is running
     while(app) {
@@ -129,7 +136,7 @@ int main(int argc, char * argv[]) try
                 ImGui::SetCursorPos({ app.width() / 2 - 100, 3 * app.height() / 5 + 90});
                 ImGui::Text("Click 'record' to start recording");
                 ImGui::SetCursorPos({ app.width() / 2 - 100, 3 * app.height() / 5 + 110 });
-                if (ImGui::Button("record", { 50, 50 }))  // 创建一个按钮，按钮的大小为50*50，如果按钮被点击则返回true
+                if (ImGui::Button("record\nbag", { 50, 50 }))  // 创建一个按钮，按钮的大小为50*50，如果按钮被点击则返回true
                 {
                     // If it is the start of a new recording (device is not a recorder yet)
                     if (!device.as<rs2::recorder>())  //  如果没有在录制
@@ -146,34 +153,69 @@ int main(int argc, char * argv[]) try
                         device.as<rs2::recorder>().resume(); // rs2::recorder allows access to 'resume' function  如果是暂停后恢复录制，则无需重置共享指针
                     }
                     recording = true;
+                    record_bag = true;
+                    recordmp4 = false;
+                }
+                ImGui::SetCursorPos({ app.width() / 2, 3 * app.height() / 5 + 110 });
+                if (ImGui::Button("record\nmp4", { 50, 50 }))  // 创建一个按钮，按钮的大小为50*50，如果按钮被点击则返回true
+                {
+                    recording = true;
+                    recordmp4 = true;
+                    record_bag = false;
+                }
+                if(recording && recordmp4)
+                {
+                    rs2::video_frame rgb_video = rgb.as<rs2::video_frame>();
+                    cv::Mat image(cv::Size(rgb_video.get_width(), rgb_video.get_height()), CV_8UC3, (void*)rgb.get_data(), cv::Mat::AUTO_STEP);
+                    // 转换 BGR 到 RGB
+                    cv::Mat image_rgb;
+                    cv::cvtColor(image, image_rgb, cv::COLOR_BGR2RGB);
+                    video.write(image_rgb);
+                    // std::cout << "write frame" << std::endl;
+                    std::cout << "Frame written to video: " << image_rgb.size() << std::endl;
                 }
 
                 /*
                 When pausing, device still holds the file.
                 */
-                if (device.as<rs2::recorder>())  
+                if (device.as<rs2::recorder>() || (recording && recordmp4))  
                 {
-                    if (recording)
+                    if (recording && record_bag)
                     {
                         ImGui::SetCursorPos({ app.width() / 2 - 100, 3 * app.height() / 5 + 60 });
                         ImGui::TextColored({ 255 / 255.f, 64 / 255.f, 54 / 255.f, 1 }, "Recording to file 'a.bag'");
                     }
-
+                    if(recording && recordmp4)
+                    {
+                        ImGui::SetCursorPos({ app.width() / 2 - 100, 3 * app.height() / 5 + 60 });
+                        ImGui::TextColored({ 255 / 255.f, 64 / 255.f, 54 / 255.f, 1 }, "Recording to file 'output.mp4'");
+                    }
                     // Pause the playback if button is clicked
-                    ImGui::SetCursorPos({ app.width() / 2, 3 * app.height() / 5 + 110 });
+                    ImGui::SetCursorPos({ app.width() / 2 + 100, 3 * app.height() / 5 + 110 });
                     if (ImGui::Button("pause\nrecord", { 50, 50 }))  //  pause之后，device仍然持有文件，按下record之后会继续录制
                     {
-                        device.as<rs2::recorder>().pause();
+                        if(record_bag)
+                        {
+                            device.as<rs2::recorder>().pause();
+                        }
                         recording = false;
                     }
 
-                    ImGui::SetCursorPos({ app.width() / 2 + 100, 3 * app.height() / 5 + 110 });
+                    ImGui::SetCursorPos({ app.width() / 2 + 200, 3 * app.height() / 5 + 110 });
                     if (ImGui::Button(" stop\nrecord", { 50, 50 }))  
                     {
+                        if(record_bag)
+                        {
                         pipe->stop(); // Stop the pipeline that holds the file and the recorder
                         pipe = std::make_shared<rs2::pipeline>(); //Reset the shared pointer with a new pipeline
                         pipe->start(); // Resume streaming with default configuration
                         device = pipe->get_active_profile().get_device();
+                        }
+                        if(recordmp4)
+                        {
+                            video.release();
+                            std::cout << "release mp4 video" << std::endl;
+                        }
                         recorded = true; // Now we can run the file
                         recording = false;
                     }
@@ -187,18 +229,21 @@ int main(int argc, char * argv[]) try
                 ImGui::SetCursorPos({ app.width() / 2 - 100, 4 * app.height() / 5 + 50});
                 if (ImGui::Button("play", { 50, 50 }))
                 {
-                    if (!device.as<rs2::playback>())
+                    if(record_bag)
                     {
-                        pipe->stop(); // Stop streaming with default configuration
-                        pipe = std::make_shared<rs2::pipeline>();
-                        rs2::config cfg;
-                        cfg.enable_device_from_file("a.bag");
-                        pipe->start(cfg); //File will be opened in read mode at this point
-                        device = pipe->get_active_profile().get_device();
-                    }
-                    else
-                    {
-                        device.as<rs2::playback>().resume();
+                        if (!device.as<rs2::playback>())
+                        {
+                            pipe->stop(); // Stop streaming with default configuration
+                            pipe = std::make_shared<rs2::pipeline>();
+                            rs2::config cfg;
+                            cfg.enable_device_from_file("a.bag");
+                            pipe->start(cfg); //File will be opened in read mode at this point
+                            device = pipe->get_active_profile().get_device();
+                        }
+                        else
+                        {
+                            device.as<rs2::playback>().resume();
+                        }
                     }
                 }
             }
@@ -206,6 +251,8 @@ int main(int argc, char * argv[]) try
             // If device is playing a recording, we allow pause and stop
             if (device.as<rs2::playback>())
             {
+                if(record_bag)
+                {
                 rs2::playback playback = device.as<rs2::playback>();
                 if (pipe->poll_for_frames(&frames)) // Check if new frames are ready
                 {
@@ -230,6 +277,7 @@ int main(int argc, char * argv[]) try
                     pipe = std::make_shared<rs2::pipeline>();
                     pipe->start();
                     device = pipe->get_active_profile().get_device();
+                }
                 }
             }
 
