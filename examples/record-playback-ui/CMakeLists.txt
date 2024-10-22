@@ -16,7 +16,7 @@ else()
 endif()
 
 if(BUILD_GRAPHICAL_EXAMPLES)
-    add_executable(rs-record-playback-ui rs-record-playback-ui.cpp ../example.hpp ../../third-party/imgui/imgui.cpp ../../third-party/imgui/imgui_draw.cpp ../../third-party/imgui/imgui_impl_glfw.cpp)
+    add_executable(rs-record-playback-ui rs-record-playback-ui.cpp ../example.hpp ../../third-party/imgui/imgui.cpp ../../third-party/imgui/imgui_draw.cpp ../../third-party/imgui/imgui_impl_glfw.cpp )
     set_property(TARGET rs-record-playback-ui PROPERTY CXX_STANDARD 11)
     target_link_libraries(rs-record-playback-ui ${DEPENDENCIES} ${OpenCV_LIBS})
     include_directories(rs-record-playback-ui ../ ../../third-party/tclap/include ../../third-party/imgui) 

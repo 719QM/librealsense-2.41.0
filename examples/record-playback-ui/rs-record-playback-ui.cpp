@@ -13,12 +13,49 @@
 #include <iostream>
 #include <iomanip>
 #include <opencv2/opencv.hpp>
+#include <windows.h>
+#include <commdlg.h>  // For file dialog
+#include <string>
+
 
 // Helper function for dispaying time conveniently
 std::string pretty_time(std::chrono::nanoseconds duration);
 // Helper function for rendering a seek bar
 void draw_seek_bar(rs2::playback& playback, int* seek_pos, float2& location, float width);
 
+std::wstring SaveFileDialog()
+{
+    wchar_t file_name[MAX_PATH] = {0};  // 使用宽字符
+
+    OPENFILENAMEW ofn;  // 使用宽字符的结构体OPENFILENAMEW
+    ZeroMemory(&ofn, sizeof(ofn));
+    ofn.lStructSize = sizeof(ofn);
+    ofn.hwndOwner = nullptr;
+    ofn.lpstrFilter = L"All Files\0*.*\0";  // 使用宽字符过滤器
+    ofn.lpstrFile = file_name;
+    ofn.nMaxFile = MAX_PATH;
+    ofn.Flags = OFN_EXPLORER | OFN_OVERWRITEPROMPT;  // 允许覆盖已存在的文件
+    ofn.lpstrDefExt = L"";  // 默认扩展名
+
+    std::wstring filePath;
+
+    // 打开保存文件对话框
+    if (GetSaveFileNameW(&ofn))  // 使用宽字符版API
+    {
+        filePath = file_name;  // 获取用户选择的路径和文件名
+    }
+    std::wcout << L"File path: " << filePath << std::endl;
+
+    return filePath;
+}
+// 将std::wstring转换为std::string
+std::string WStringToString(const std::wstring& wstr)
+{
+    int size_needed = WideCharToMultiByte(CP_UTF8, 0, wstr.c_str(), -1, NULL, 0, NULL, NULL);
+    std::string str(size_needed, 0);
+    WideCharToMultiByte(CP_UTF8, 0, wstr.c_str(), -1, &str[0], size_needed, NULL, NULL);
+    return str;
+}
 int main(int argc, char * argv[]) try
 {
     // Create a simple OpenGL window for rendering:
@@ -60,9 +97,10 @@ int main(int argc, char * argv[]) try
     int seek_pos;
 
     // Create a video writer to save the frames
-    int fps = 5;
-    cv::VideoWriter video("output.mp4", cv::VideoWriter::fourcc('M', 'J', 'P', 'G'), fps, cv::Size(1280, 720));
+    int fps = 30;
 
+    std::string filePath;
+    cv::VideoWriter video;
 
     // While application is running
     while(app) {
@@ -108,6 +146,7 @@ int main(int argc, char * argv[]) try
 
         if(rgb_frame || depth_frame || both_frames)
         {
+            // OpenFileDialog();
             ImGui::SetCursorPos({ app.width() / 2 - 200, 3 * app.height() / 5 + 110 });
             if (ImGui::Button(" return", { 50, 50 }))
             {
@@ -141,12 +180,24 @@ int main(int argc, char * argv[]) try
                     // If it is the start of a new recording (device is not a recorder yet)
                     if (!device.as<rs2::recorder>())  //  如果没有在录制
                     {
-                        pipe->stop(); // Stop the pipeline with the default configuration
-                        pipe = std::make_shared<rs2::pipeline>();  //  创建一个新的pipeline，make_shared是一个模板函数，用于创建一个shared_ptr对象
-                        rs2::config cfg; // Declare a new configuration
-                        cfg.enable_record_to_file("a.bag");  //  允许将数据记录到文件中
-                        pipe->start(cfg); //File will be opened at this point
-                        device = pipe->get_active_profile().get_device();  //  获取当前设备
+                        std::wstring sourceFilePath;
+                        // 打开文件选择对话框，获取源文件路径
+                        if(filePath.empty()){
+                            sourceFilePath = SaveFileDialog();
+                            if(!sourceFilePath.empty())
+                            {
+                                pipe->stop(); // Stop the pipeline with the default configuration
+                                pipe = std::make_shared<rs2::pipeline>();  //  创建一个新的pipeline，make_shared是一个模板函数，用于创建一个shared_ptr对象
+                                rs2::config cfg; // Declare a new configuration
+                                filePath = WStringToString(sourceFilePath);  // 转换路径
+                                cfg.enable_record_to_file(filePath);  //  允许将数据记录到文件中
+                                pipe->start(cfg); //File will be opened at this point
+                                device = pipe->get_active_profile().get_device();  //  获取当前设备
+                            }
+                            else{
+                                std::wcout << L"No file path selected." << std::endl;  // 提示用户未选择文件路径
+                            }
+                        }
                     }
                     else
                     { // If the recording is resumed after a pause, there's no need to reset the shared pointer
@@ -159,20 +210,61 @@ int main(int argc, char * argv[]) try
                 ImGui::SetCursorPos({ app.width() / 2, 3 * app.height() / 5 + 110 });
                 if (ImGui::Button("record\nmp4", { 50, 50 }))  // 创建一个按钮，按钮的大小为50*50，如果按钮被点击则返回true
                 {
+                    std::wstring sourceFilePath;
+                    if(filePath.empty())  //  如果路径是空的，也就是第一次写入时
+                    {
+                        sourceFilePath = SaveFileDialog();
+                        filePath = WStringToString(sourceFilePath);  // 转换路径
+                        if (video.isOpened()) {
+                            video.release();  // 释放当前的 VideoWriter
+                        }
+                        if(rgb_frame)
+                        {
+                            video.open(filePath, cv::VideoWriter::fourcc('M', 'J', 'P', 'G'), fps, cv::Size(1280, 720));
+                        }
+                        else if(depth_frame)
+                        {
+                            video.open(filePath, cv::VideoWriter::fourcc('F', 'F', 'V', '1'), fps, cv::Size(640, 480));
+                        }
+                        // cv::VideoWriter video(filePath, cv::VideoWriter::fourcc('M', 'J', 'P', 'G'), fps, cv::Size(1280, 720));
+                    }
                     recording = true;
                     recordmp4 = true;
                     record_bag = false;
+
                 }
                 if(recording && recordmp4)
                 {
-                    rs2::video_frame rgb_video = rgb.as<rs2::video_frame>();
-                    cv::Mat image(cv::Size(rgb_video.get_width(), rgb_video.get_height()), CV_8UC3, (void*)rgb.get_data(), cv::Mat::AUTO_STEP);
-                    // 转换 BGR 到 RGB
-                    cv::Mat image_rgb;
-                    cv::cvtColor(image, image_rgb, cv::COLOR_BGR2RGB);
-                    video.write(image_rgb);
-                    // std::cout << "write frame" << std::endl;
-                    std::cout << "Frame written to video: " << image_rgb.size() << std::endl;
+                    if(rgb_frame)
+                    {
+                        rs2::video_frame rgb_video = rgb.as<rs2::video_frame>();
+                        cv::Mat image(cv::Size(rgb_video.get_width(), rgb_video.get_height()), CV_8UC3, (void*)rgb.get_data(), cv::Mat::AUTO_STEP);
+                        // 转换 BGR 到 RGB
+                        cv::Mat image_rgb;
+                        cv::cvtColor(image, image_rgb, cv::COLOR_BGR2RGB);
+                        video.write(image_rgb);
+                        // std::cout << "write frame" << std::endl;
+                        std::cout << "Frame written to video: " << image_rgb.size() << std::endl;
+                    }
+                    else if(depth_frame)
+                    {
+                        // 假设 depth_frame 是深度图像
+                        rs2::depth_frame depth_video = depth.as<rs2::depth_frame>();
+                        
+                        // 创建深度图像的 cv::Mat
+                        cv::Mat depth_image(cv::Size(depth_video.get_width(), depth_video.get_height()), CV_16UC1, (void*)depth.get_data(), cv::Mat::AUTO_STEP);
+                        
+                        // 转换深度图像为伪彩色图像
+                        cv::Mat depth_colored;
+                        cv::normalize(depth_image, depth_image, 0, 255, cv::NORM_MINMAX, CV_16UC1); // 归一化深度图像
+                        cv::applyColorMap(depth_image, depth_colored, cv::COLORMAP_JET); // 应用伪彩色映射
+
+                        // 将伪彩色图像写入视频
+                        video.write(depth_colored);
+                        
+                        std::cout << "Depth frame written to video: " << depth_colored.size() << std::endl;
+
+                    }
                 }
 
                 /*
@@ -183,12 +275,12 @@ int main(int argc, char * argv[]) try
                     if (recording && record_bag)
                     {
                         ImGui::SetCursorPos({ app.width() / 2 - 100, 3 * app.height() / 5 + 60 });
-                        ImGui::TextColored({ 255 / 255.f, 64 / 255.f, 54 / 255.f, 1 }, "Recording to file 'a.bag'");
+                        ImGui::TextColored({ 255 / 255.f, 64 / 255.f, 54 / 255.f, 1 }, "Recording to file '%s'",filePath.c_str());
                     }
                     if(recording && recordmp4)
                     {
                         ImGui::SetCursorPos({ app.width() / 2 - 100, 3 * app.height() / 5 + 60 });
-                        ImGui::TextColored({ 255 / 255.f, 64 / 255.f, 54 / 255.f, 1 }, "Recording to file 'output.mp4'");
+                        ImGui::TextColored({ 255 / 255.f, 64 / 255.f, 54 / 255.f, 1 }, "Recording to file '%s'",filePath.c_str());
                     }
                     // Pause the playback if button is clicked
                     ImGui::SetCursorPos({ app.width() / 2 + 100, 3 * app.height() / 5 + 110 });
@@ -236,7 +328,7 @@ int main(int argc, char * argv[]) try
                             pipe->stop(); // Stop streaming with default configuration
                             pipe = std::make_shared<rs2::pipeline>();
                             rs2::config cfg;
-                            cfg.enable_device_from_file("a.bag");
+                            cfg.enable_device_from_file(filePath);
                             pipe->start(cfg); //File will be opened in read mode at this point
                             device = pipe->get_active_profile().get_device();
                         }
@@ -253,31 +345,31 @@ int main(int argc, char * argv[]) try
             {
                 if(record_bag)
                 {
-                rs2::playback playback = device.as<rs2::playback>();
-                if (pipe->poll_for_frames(&frames)) // Check if new frames are ready
-                {
-                    depth = color_map.process(frames.get_depth_frame()); // Find and colorize the depth data for rendering
-                    rgb = frames.get_color_frame(); // Find the color data
-                }
+                    rs2::playback playback = device.as<rs2::playback>();
+                    if (pipe->poll_for_frames(&frames)) // Check if new frames are ready
+                    {
+                        depth = color_map.process(frames.get_depth_frame()); // Find and colorize the depth data for rendering
+                        rgb = frames.get_color_frame(); // Find the color data
+                    }
 
-                // Render a seek bar for the player
-                float2 location = { app.width() / 4, 4 * app.height() / 5 + 110 };
-                draw_seek_bar(playback , &seek_pos, location, app.width() / 2);
+                    // Render a seek bar for the player
+                    float2 location = { app.width() / 4, 4 * app.height() / 5 + 110 };
+                    draw_seek_bar(playback , &seek_pos, location, app.width() / 2);
 
-                ImGui::SetCursorPos({ app.width() / 2, 4 * app.height() / 5 + 50 });
-                if (ImGui::Button(" pause\nplaying", { 50, 50 }))
-                {
-                    playback.pause();
-                }
+                    ImGui::SetCursorPos({ app.width() / 2, 4 * app.height() / 5 + 50 });
+                    if (ImGui::Button(" pause\nplaying", { 50, 50 }))
+                    {
+                        playback.pause();
+                    }
 
-                ImGui::SetCursorPos({ app.width() / 2 + 100, 4 * app.height() / 5 + 50 });
-                if (ImGui::Button("  stop\nplaying", { 50, 50 }))
-                {
-                    pipe->stop();
-                    pipe = std::make_shared<rs2::pipeline>();
-                    pipe->start();
-                    device = pipe->get_active_profile().get_device();
-                }
+                    ImGui::SetCursorPos({ app.width() / 2 + 100, 4 * app.height() / 5 + 50 });
+                    if (ImGui::Button("  stop\nplaying", { 50, 50 }))
+                    {
+                        pipe->stop();
+                        pipe = std::make_shared<rs2::pipeline>();
+                        pipe->start();
+                        device = pipe->get_active_profile().get_device();
+                    }
                 }
             }
 
