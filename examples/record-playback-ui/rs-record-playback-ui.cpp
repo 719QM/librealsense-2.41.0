@@ -11,6 +11,7 @@
 // Includes for time display
 #include <sstream>
 #include <iostream>
+#include <fstream>
 #include <iomanip>
 #include <opencv2/opencv.hpp>
 #include <windows.h>
@@ -48,6 +49,38 @@ std::wstring SaveFileDialog()
 
     return filePath;
 }
+void SaveFileDialog_noopen(const std::string& filepath)
+{
+    // 转换 std::string 到 std::wstring
+    std::wstring wfilepath(filepath.begin(), filepath.end());
+
+    // 打开文件以便保存
+    std::ofstream file(wfilepath, std::ios::binary);
+}
+
+std::wstring OpenFileDialog()
+{
+    wchar_t file_name[MAX_PATH] = {0};  // 使用宽字符
+
+    OPENFILENAMEW ofn;  // 使用宽字符的结构体OPENFILENAMEW
+    ZeroMemory(&ofn, sizeof(ofn));
+    ofn.lStructSize = sizeof(ofn);
+    ofn.hwndOwner = nullptr;
+    ofn.lpstrFilter = L"All Files\0*.*\0";  // 使用宽字符过滤器
+    ofn.lpstrFile = file_name;
+    ofn.nMaxFile = MAX_PATH;
+    ofn.Flags = OFN_EXPLORER | OFN_FILEMUSTEXIST | OFN_HIDEREADONLY;
+    ofn.lpstrDefExt = L"";
+
+    std::wstring openfilePath;
+
+    if (GetOpenFileNameW(&ofn))  // 使用宽字符版API
+    {
+        openfilePath = file_name;
+    }
+
+    return openfilePath;
+}
 // 将std::wstring转换为std::string
 std::string WStringToString(const std::wstring& wstr)
 {
@@ -71,6 +104,7 @@ int main(int argc, char * argv[]) try
     bool button_visible = true;
     bool record_bag =false;
     bool recordmp4 = false;
+    bool long_video = false;
 
     // Declare a texture for the depth image on the GPU
     texture depth_image;
@@ -83,12 +117,22 @@ int main(int argc, char * argv[]) try
 
     // Declare depth colorizer for pretty visualization of depth data
     rs2::colorizer color_map;
+    int camera_fps;
+    int video_fps;
+    std::cout << "Please enter the camera fps: ";
+    std::cin >> camera_fps;
+    std::cout << "Please enter the video fps: ";
+    std::cin >> video_fps; 
+
 
     // Create a shared pointer to a pipeline
     auto pipe = std::make_shared<rs2::pipeline>();
 
+    rs2::config initial_cfg;
+    initial_cfg.enable_stream(RS2_STREAM_COLOR, 1280, 720, RS2_FORMAT_RGB8, camera_fps);
+    // initial_cfg.enable_stream(RS2_STREAM_DEPTH, 640, 480, RS2_FORMAT_Z16, 30);
     // Start streaming with default configuration
-    pipe->start();
+    pipe->start(initial_cfg);
 
     // Initialize a shared pointer to a device with the current device on the pipeline
     rs2::device device = pipe->get_active_profile().get_device();
@@ -97,10 +141,16 @@ int main(int argc, char * argv[]) try
     int seek_pos;
 
     // Create a video writer to save the frames
-    int fps = 30;
+    int fps = 6;
 
     std::string filePath;
+    std::string openfilePath;
     cv::VideoWriter video;
+    // for long video
+    int frameCout = 0;
+    int video_index = 0;
+    std::string numberedFilePath;
+    std::ofstream file;
 
     // While application is running
     while(app) {
@@ -115,7 +165,7 @@ int main(int argc, char * argv[]) try
         ImGui_ImplGlfw_NewFrame(1);
         ImGui::SetNextWindowSize({ app.width(), app.height() }); 
         ImGui::Begin("app", nullptr, flags);
-
+        ImGui::SetCursorPos({ app.width() / 2 - 300, 3 * app.height() / 5 + 110 });
         if(button_visible)
         {
             ImGui::SetCursorPos({ app.width() / 2-100, 3 * app.height() / 5 + 110 });
@@ -154,13 +204,26 @@ int main(int argc, char * argv[]) try
                 depth_frame = false;
                 both_frames = false;
                 button_visible = true;
+                long_video  = false;
             }
             // If the device is sreaming live and not from a file 如果设备正在实时流并且不是从文件中读取的
             if (!device.as<rs2::playback>())
             {
                 frames = pipe->wait_for_frames(); // wait for next set of frames from the camera
+                if(rgb_frame)
+                {
+                    rgb = frames.get_color_frame(); // Find the color data
+                }
+                else if(depth_frame)
+                {
+                    depth = color_map.process(frames.get_depth_frame()); // Find and colorize the depth data
+                }
+                else if(both_frames)
+                {
                 depth = color_map.process(frames.get_depth_frame()); // Find and colorize the depth data
                 rgb = frames.get_color_frame(); // Find the color data
+                }
+                
             }
 
             // Set options for the ImGui buttons 设置按钮的样式：选中时的背景颜色，按钮的背景颜色，鼠标悬停时的背景颜色，按钮按下时的背景颜色，按钮的圆角
@@ -198,7 +261,7 @@ int main(int argc, char * argv[]) try
                                 std::wcout << L"No file path selected." << std::endl;  // 提示用户未选择文件路径
                             }
                         }
-                    }
+                    } 
                     else
                     { // If the recording is resumed after a pause, there's no need to reset the shared pointer
                         device.as<rs2::recorder>().resume(); // rs2::recorder allows access to 'resume' function  如果是暂停后恢复录制，则无需重置共享指针
@@ -220,21 +283,83 @@ int main(int argc, char * argv[]) try
                         }
                         if(rgb_frame)
                         {
-                            video.open(filePath, cv::VideoWriter::fourcc('M', 'J', 'P', 'G'), fps, cv::Size(1280, 720));
+                            video.open(filePath, cv::VideoWriter::fourcc('H', '2', '6', '4'), video_fps, cv::Size(1280, 720));
                         }
                         else if(depth_frame)
                         {
-                            video.open(filePath, cv::VideoWriter::fourcc('F', 'F', 'V', '1'), fps, cv::Size(640, 480));
+                            video.open(filePath, cv::VideoWriter::fourcc('F', 'F', 'V', '1'), video_fps, cv::Size(640, 480));
                         }
                         // cv::VideoWriter video(filePath, cv::VideoWriter::fourcc('M', 'J', 'P', 'G'), fps, cv::Size(1280, 720));
                     }
                     recording = true;
                     recordmp4 = true;
                     record_bag = false;
-
                 }
+                ImGui::SetCursorPos({ app.width() / 2, 3 * app.height() / 5 + 160 });
+                if (ImGui::Button("record\nlong\nvideo", { 50, 50 }))  // 创建一个按钮，按钮的大小为50*50，如果按钮被点击则返回true
+                {
+                    std::wstring sourceFilePath;
+                    if(filePath.empty())  //  如果路径是空的，也就是第一次写入时
+                    {
+                        sourceFilePath = SaveFileDialog();
+                        filePath = WStringToString(sourceFilePath);  // 转换路径
+                        if (video.isOpened()) {
+                            video.release();  // 释放当前的 VideoWriter
+                        }
+                        std::string baseFilePath = filePath;
+                        std::size_t dotPos = baseFilePath.find_last_of('.');  // 查找最后一个 '.' 的位置
+
+                        // 如果找到了扩展名
+                        if (dotPos != std::string::npos) {
+                        std::stringstream ss;
+                        ss << baseFilePath.substr(0, dotPos) << "_" << video_index << baseFilePath.substr(dotPos);  // 在扩展名之前插入编号
+                        numberedFilePath = ss.str();
+                        // 转换 std::string 到 std::wstring
+                        std::wstring wfilepath(numberedFilePath.begin(), numberedFilePath.end());
+                        // 打开文件以便保存
+                        file.open(wfilepath, std::ios::binary);
+                        video.open(numberedFilePath, cv::VideoWriter::fourcc('H', '2', '6', '4'), video_fps, cv::Size(1280, 720));
+                        std::cout << "open mp4 video"<< numberedFilePath << std::endl;
+                        // cv::VideoWriter video(filePath, cv::VideoWriter::fourcc('M', 'J', 'P', 'G'), fps, cv::Size(1280, 720));
+                        }
+
+                    }
+                    recording = true;
+                    recordmp4 = true;
+                    record_bag = false;
+                    long_video = true;
+                }
+
                 if(recording && recordmp4)
                 {
+                    if(long_video)
+                    {
+                        if(frameCout!=0 && frameCout % (60 * video_fps) == 0)
+                        {
+                            video_index++;
+                            file.close();  
+                            // 关闭当前视频文件
+                            if (video.isOpened()) {
+                                video.release();
+                            }
+                        std::string baseFilePath = filePath;
+                        std::size_t dotPos = baseFilePath.find_last_of('.');  // 查找最后一个 '.' 的位置
+
+                        // 如果找到了扩展名
+                        if (dotPos != std::string::npos) {
+                        std::stringstream ss;
+                        ss << baseFilePath.substr(0, dotPos) << "_" << video_index << baseFilePath.substr(dotPos);  // 在扩展名之前插入编号
+                        numberedFilePath = ss.str();
+                        // 转换 std::string 到 std::wstring
+                        std::wstring wfilepath(numberedFilePath.begin(), numberedFilePath.end());
+                        // 打开文件以便保存
+                        file.open(wfilepath, std::ios::binary);
+                        video.open(numberedFilePath, cv::VideoWriter::fourcc('H', '2', '6', '4'), video_fps, cv::Size(1280, 720));
+                        std::cout << "open mp4 video"<< numberedFilePath << std::endl;
+                        // cv::VideoWriter video(filePath, cv::VideoWriter::fourcc('M', 'J', 'P', 'G'), fps, cv::Size(1280, 720));
+                        }
+                        }
+                    }
                     if(rgb_frame)
                     {
                         rs2::video_frame rgb_video = rgb.as<rs2::video_frame>();
@@ -243,8 +368,9 @@ int main(int argc, char * argv[]) try
                         cv::Mat image_rgb;
                         cv::cvtColor(image, image_rgb, cv::COLOR_BGR2RGB);
                         video.write(image_rgb);
+                        frameCout ++;
                         // std::cout << "write frame" << std::endl;
-                        std::cout << "Frame written to video: " << image_rgb.size() << std::endl;
+                        std::cout <<frameCout << ":  "<< "Frame written to video: " << image_rgb.size() << std::endl;
                     }
                     else if(depth_frame)
                     {
@@ -265,6 +391,7 @@ int main(int argc, char * argv[]) try
                         std::cout << "Depth frame written to video: " << depth_colored.size() << std::endl;
 
                     }
+                    
                 }
 
                 /*
@@ -280,7 +407,14 @@ int main(int argc, char * argv[]) try
                     if(recording && recordmp4)
                     {
                         ImGui::SetCursorPos({ app.width() / 2 - 100, 3 * app.height() / 5 + 60 });
-                        ImGui::TextColored({ 255 / 255.f, 64 / 255.f, 54 / 255.f, 1 }, "Recording to file '%s'",filePath.c_str());
+                        if(!long_video)
+                        {
+                            ImGui::TextColored({ 255 / 255.f, 64 / 255.f, 54 / 255.f, 1 }, "Recording to file '%s'",filePath.c_str());
+                        }
+                        else
+                        {
+                            ImGui::TextColored({ 255 / 255.f, 64 / 255.f, 54 / 255.f, 1 }, "Recording to file '%s'",numberedFilePath.c_str());
+                        }
                     }
                     // Pause the playback if button is clicked
                     ImGui::SetCursorPos({ app.width() / 2 + 100, 3 * app.height() / 5 + 110 });
@@ -307,15 +441,46 @@ int main(int argc, char * argv[]) try
                         {
                             video.release();
                             std::cout << "release mp4 video" << std::endl;
+                            if(long_video)
+                            {
+                                file.close();
+                            }
                         }
                         recorded = true; // Now we can run the file
                         recording = false;
+                        long_video = false;
+                        filePath.clear();
                     }
                 }
             }
 
             // After a recording is done, we can play it
-            if (recorded) {
+            ImGui::SetCursorPos({ app.width() / 2 -300, 3 * app.height() / 5 + 110 });
+            if(ImGui::Button("play\nbag", { 50, 50 }))
+            {
+                record_bag = true;
+                std::wstring openFilePathw;
+                if(openfilePath.empty())
+                {
+                    openFilePathw = OpenFileDialog();
+                    openfilePath = WStringToString(openFilePathw);  // 转换路径
+                }
+                if (!device.as<rs2::playback>())
+                {
+                    pipe->stop(); // Stop streaming with default configuration
+                    pipe = std::make_shared<rs2::pipeline>();
+                    rs2::config cfg;
+                    cfg.enable_device_from_file(openfilePath);
+                    pipe->start(cfg); //File will be opened in read mode at this point
+                    device = pipe->get_active_profile().get_device();
+                }
+                else
+                {
+                    device.as<rs2::playback>().resume();
+                }
+            }
+            if (recorded)
+            {
                 ImGui::SetCursorPos({ app.width() / 2 - 100, 4 * app.height() / 5 + 30 });
                 ImGui::Text("Click 'play' to start playing");
                 ImGui::SetCursorPos({ app.width() / 2 - 100, 4 * app.height() / 5 + 50});
