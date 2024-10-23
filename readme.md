@@ -1,6 +1,12 @@
 <p align="center"><img src="doc/img/realsense.png" width="70%" /><br><br></p>
 
 -----------------
+if you want to use rs-record-playback-ui.exe, you need .dll as follows:
+openh264-1.8.0-win64.dll
+opencv_videoio_ffmpeg4100_64.dll
+vcruntime140_1d.dll
+opencv_world4100d.dll
+realsense2d.dll
 
 ## Overview
 **Intel® RealSense™ SDK 2.0** is a cross-platform library for Intel® RealSense™ depth cameras (D400 series and the SR300) and the [T265 tracking camera](./doc/t265.md).
